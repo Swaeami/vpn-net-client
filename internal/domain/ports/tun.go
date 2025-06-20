@@ -10,4 +10,6 @@ type TunManager interface {
 	Create() error
 	Read(ctx context.Context)
 	GetConfig() entities.TunConfig
+	Destroy() error
+	CheckAdminRights() error
 }

@@ -58,8 +58,15 @@ func main() {
 		VpnNet: &vpnNet,
 	})
 
+	err := tun.CheckAdminRights()
+	if err != nil {
+		log.Printf("admin rights error: %v", err)
+		fmt.Scanln()
+		return
+	}
+
 	client := usecases.NewClient(coordinator, tun)
-	err := client.Connect(ctx)
+	err = client.Connect(ctx)
 	if err != nil {
 		log.Println(err.Error())
 		fmt.Scanln()
