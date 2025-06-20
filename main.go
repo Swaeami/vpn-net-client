@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os/exec"
 	"strconv"
 	"sync"
 
+	"github.com/Swaeami/vpn-net-grpc/client-macos/internal/infrastructure/tun"
 	"github.com/songgao/water"
 )
 
@@ -33,33 +33,15 @@ type NetRequest struct {
 }
 
 func CreateTun() (*water.Interface, error) {
-	config := water.Config{
-		DeviceType: water.TUN,
-	}
-	config.Name = INTERFACE_NAME
-	tunInterface, err := water.New(config)
-	if err != nil {
-		return nil, err
-	}
-	cmd := exec.Command("ifconfig", INTERFACE_NAME, THIS_IP, THIS_IP, "up")
-	_, err = cmd.Output()
-	if err != nil {
-		return nil, err
+	config := tun.TunConfig{
+		InterfaceName: INTERFACE_NAME,
+		IP:            THIS_IP,
+		MTU:           MTU,
+		Network:       NETWORK,
 	}
 
-	cmd = exec.Command("ifconfig", INTERFACE_NAME, "mtu", strconv.Itoa(MTU))
-	_, err = cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-
-	cmd = exec.Command("route", "add", "-net", NETWORK, "-interface", INTERFACE_NAME)
-	_, err = cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-
-	return tunInterface, nil
+	tunInterface := tun.NewTunManager(config)
+	return tunInterface.Create()
 }
 
 func ConnectToSingalizer() (*net.UDPConn, error) {
