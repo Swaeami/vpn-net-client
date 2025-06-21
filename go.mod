@@ -4,4 +4,4 @@ go 1.24.3
 
 require github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 
-require golang.org/x/sys v0.12.0 // indirect
+require golang.org/x/sys v0.12.0
