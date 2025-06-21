@@ -39,13 +39,15 @@ func main() {
 		<-sigChan
 		log.Println("stopping...")
 		cancel()
+		log.Println(runtime.NumGoroutine())
 		if runtime.NumGoroutine() > 3 {
 			go func() {
 				time.Sleep(5 * time.Second)
 				os.Exit(1)
 			}()
+		} else {
+			os.Exit(1)
 		}
-		os.Exit(1)
 	}()
 
 	var vpnNet entities.VpnNet

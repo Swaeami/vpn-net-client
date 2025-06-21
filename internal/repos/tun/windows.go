@@ -3,18 +3,24 @@
 package tun
 
 import (
+	"context"
 	"fmt"
+	"log"
+	"net"
+	"net/netip"
 	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Swaeami/vpn-net/client/internal/domain/entities"
-	"github.com/songgao/water"
+	"github.com/Swaeami/vpn-net/client/pkg/winipcfg"
+	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/tun"
 )
 
 type Tun struct {
 	TunBase
+	Interface *tun.Device
 }
 
 func NewTun(config entities.TunConfig) *Tun {
@@ -22,47 +28,46 @@ func NewTun(config entities.TunConfig) *Tun {
 }
 
 func (t *Tun) Create() error {
-	config := water.Config{
-		DeviceType: water.TAP,
-		PlatformSpecificParams: water.PlatformSpecificParams{
-			ComponentID:   "tap0901",
-			InterfaceName: "swaeami-tun",
-			Network:       t.Config.Info.Network,
-		},
+	id := &windows.GUID{
+		Data1: 0x0000000,
+		Data2: 0xFFFF,
+		Data3: 0xFFFF,
+		Data4: [8]byte{0xFF, 0xe9, 0x76, 0xe5, 0x8c, 0x74, 0x06, 0x3e},
 	}
-
-	tunInterface, err := water.New(config)
+	ifname := t.Config.Info.InterfaceName
+	ifce, err := tun.CreateTUNWithRequestedGUID(ifname, id, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to create TUN interface: %w", err)
 	}
 
-	time.Sleep(1 * time.Second)
-	interfaceName := tunInterface.Name()
+	nativeTunDevice := ifce.(*tun.NativeTun)
+	link := winipcfg.LUID(nativeTunDevice.LUID())
 
-	powershellCmd := fmt.Sprintf(`New-NetIPAddress -InterfaceAlias "%s" -IPAddress %s -PrefixLength 24`, interfaceName, t.Config.Info.IP)
-
-	cmd := exec.Command("powershell", "-Command", powershellCmd)
-	_, err = cmd.Output()
+	ip, err := netip.ParsePrefix(t.Config.Info.IP + "/24")
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to set IP addresses: %w", err)
 	}
+	err = link.SetIPAddresses([]netip.Prefix{ip})
+	if err != nil {
+		return fmt.Errorf("unable to set IP addresses: %w", err)
+	}
+
+	cmd := exec.Command("netsh", "interface", "set", "interface", t.Config.Info.InterfaceName, "admin=enable")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("unable to enable interface: %s\n", string(output))
+	}
+
+	link.AddRoute(netip.PrefixFrom(netip.MustParseAddr(t.Config.Info.IP), 24), netip.MustParseAddr(t.Config.Info.IP), 1)
 
 	cmd = exec.Command("netsh", "interface", "ipv4", "set", "subinterface",
-		interfaceName, "mtu="+strconv.Itoa(t.Config.Info.MTU), "store=persistent")
-	_, err = cmd.Output()
+		t.Config.Info.InterfaceName, "mtu="+strconv.Itoa(t.Config.Info.MTU), "store=persistent")
+	output, err = cmd.CombinedOutput()
 	if err != nil {
-		return err
+		fmt.Printf("Предупреждение: не удалось установить MTU: %s\n", string(output))
 	}
 
-	networkParts := strings.Split(t.Config.Info.Network, "/")
-
-	cmd = exec.Command("route", "-p", "add", networkParts[0], "mask", "255.255.255.0", t.Config.Info.IP)
-	_, err = cmd.Output()
-	if err != nil {
-		return err
-	}
-
-	t.Interface = tunInterface
+	t.Interface = &ifce
 
 	return nil
 }
@@ -75,6 +80,92 @@ func (t *Tun) Destroy() error {
 	cmd := exec.Command("route", "delete", t.Config.Info.Network, "mask", "255.255.255.0")
 	cmd.Output()
 
-	t.Interface.Close()
+	(*t.Interface).Close()
 	return nil
+}
+
+func (t *Tun) Read(ctx context.Context) {
+	defer t.Config.Wg.Done()
+
+	if t.Interface == nil {
+		log.Printf("Error - tun Read() before Create()")
+		return
+	}
+
+	type ReadResult struct {
+		n   int
+		err error
+		buf []byte
+	}
+
+	readChan := make(chan ReadResult, 1)
+
+	go func() {
+		defer close(readChan)
+		for {
+			buf := make([][]byte, 1)
+			buf[0] = make([]byte, t.Config.Info.MTU)
+			sizes := []int{t.Config.Info.MTU}
+			_, err := (*t.Interface).Read(buf, sizes, 0)
+
+			select {
+			case readChan <- ReadResult{sizes[0], err, buf[0]}:
+			case <-ctx.Done():
+				return
+			}
+
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("stopping tun")
+			return
+		case result, ok := <-readChan:
+			if !ok {
+				return
+			}
+
+			if result.err != nil {
+				log.Printf("tun read error: %v", result.err)
+				return
+			}
+
+			// походу на винде надо отдельно фильтровать пакеты хз
+			destIP := net.IP(result.buf[16:20])
+			_, subnet, _ := net.ParseCIDR("26.10.0.0/24")
+			if !subnet.Contains(destIP) {
+				continue
+			}
+			destIPsplit := strings.Split(destIP.String(), ".")
+			if destIPsplit[3] == "0" || destIPsplit[3] == "255" {
+				continue
+			}
+
+			if result.n < 20 {
+				log.Printf("too short packet: %d bytes", result.n)
+				log.Printf("packet: %v", result.buf[:result.n])
+				continue
+			}
+
+			found := false
+			for _, ip := range t.Config.VpnNet.IPs {
+				fmt.Println(ip)
+				if ip == destIP.String() {
+					found = true
+					break
+				}
+			}
+			if found {
+				log.Printf("Got %d bytes | IP from: %s | IP dest: %s\n", result.n, t.Config.Info.IP, destIP.String())
+			} else {
+				log.Printf("Got %d bytes | IP from: %s to /dev/null", result.n, destIP.String())
+			}
+
+		}
+	}
 }
