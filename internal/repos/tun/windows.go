@@ -23,7 +23,7 @@ func NewTun(config entities.TunConfig) *Tun {
 
 func (t *Tun) Create() error {
 	config := water.Config{
-		DeviceType: water.TUN,
+		DeviceType: water.TAP,
 	}
 
 	tunInterface, err := water.New(config)
