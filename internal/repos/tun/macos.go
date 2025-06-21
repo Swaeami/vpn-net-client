@@ -24,29 +24,30 @@ func NewTun(config entities.TunConfig) *Tun {
 }
 
 func (t *Tun) Create() error {
+	// we cant do fancy name on mac tun so we use any utun
 	config := water.Config{
 		DeviceType: water.TUN,
 	}
-	config.Name = t.Config.Info.InterfaceName
 
 	tunInterface, err := water.New(config)
 	if err != nil {
 		return err
 	}
+	interfaceName := tunInterface.Name()
 
-	cmd := exec.Command("ifconfig", t.Config.Info.InterfaceName, t.Config.Info.IP, t.Config.Info.IP, "up")
+	cmd := exec.Command("ifconfig", interfaceName, t.Config.IP, t.Config.IP, "up")
 	_, err = cmd.Output()
 	if err != nil {
 		return err
 	}
 
-	cmd = exec.Command("ifconfig", t.Config.Info.InterfaceName, "mtu", strconv.Itoa(t.Config.Info.MTU))
+	cmd = exec.Command("ifconfig", interfaceName, "mtu", strconv.Itoa(t.Config.MTU))
 	_, err = cmd.Output()
 	if err != nil {
 		return err
 	}
 
-	cmd = exec.Command("route", "add", "-net", t.Config.Info.Network, "-interface", t.Config.Info.InterfaceName)
+	cmd = exec.Command("route", "add", "-net", t.Config.Network, "-interface", interfaceName)
 	_, err = cmd.Output()
 	if err != nil {
 		return err
@@ -57,11 +58,11 @@ func (t *Tun) Create() error {
 	return nil
 }
 
-func (t *Tun) Read(ctx context.Context) {
-	defer t.Config.Wg.Done()
+func (t *Tun) Read(ctx context.Context, stopChan chan struct{}, vpnNet entities.VpnNet) {
 
 	if t.Interface == nil {
 		log.Printf("Error - tun Read() before Create()")
+		stopChan <- struct{}{}
 		return
 	}
 
@@ -76,7 +77,7 @@ func (t *Tun) Read(ctx context.Context) {
 	go func() {
 		defer close(readChan)
 		for {
-			buf := make([]byte, t.Config.Info.MTU)
+			buf := make([]byte, t.Config.MTU)
 			n, err := t.Interface.Read(buf)
 
 			select {
@@ -94,7 +95,7 @@ func (t *Tun) Read(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("stopping tun")
+			log.Println("Stopping TUN by context")
 			return
 		case result, ok := <-readChan:
 			if !ok {
@@ -103,6 +104,7 @@ func (t *Tun) Read(ctx context.Context) {
 
 			if result.err != nil {
 				log.Printf("tun read error: %v", result.err)
+				stopChan <- struct{}{}
 				return
 			}
 
@@ -113,7 +115,7 @@ func (t *Tun) Read(ctx context.Context) {
 
 			destIP := net.IP(result.buf[16:20])
 			found := false
-			for _, ip := range t.Config.VpnNet.IPs {
+			for _, ip := range vpnNet.IPs {
 				fmt.Println(ip)
 				if ip == destIP.String() {
 					found = true
@@ -121,7 +123,7 @@ func (t *Tun) Read(ctx context.Context) {
 				}
 			}
 			if found {
-				log.Printf("Got %d bytes | IP from: %s | IP dest: %s\n", result.n, t.Config.Info.IP, destIP.String())
+				log.Printf("Got %d bytes | IP from: %s | IP dest: %s\n", result.n, t.Config.IP, destIP.String())
 			} else {
 				log.Printf("Got %d bytes | IP from: %s to /dev/null", result.n, destIP.String())
 			}
@@ -134,7 +136,7 @@ func (t *Tun) Destroy() error {
 		return nil
 	}
 
-	cmd := exec.Command("route", "delete", "-net", t.Config.Info.Network)
+	cmd := exec.Command("route", "delete", "-net", t.Config.Network)
 	cmd.Output()
 
 	t.Interface.Close()

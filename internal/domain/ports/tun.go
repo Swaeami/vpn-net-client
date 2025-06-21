@@ -8,7 +8,7 @@ import (
 
 type TunManager interface {
 	Create() error
-	Read(ctx context.Context)
+	Read(ctx context.Context, stopChan chan struct{}, vpnNet entities.VpnNet)
 	GetConfig() entities.TunConfig
 	Destroy() error
 }

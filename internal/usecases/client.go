@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/Swaeami/vpn-net/client/helpers/admin"
 	"github.com/Swaeami/vpn-net/client/internal/domain/entities"
@@ -19,12 +20,11 @@ func NewClient(coordinator ports.NetworkCoordinator, tunManager ports.TunManager
 	return &Client{coordinator: coordinator, tunManager: tunManager}
 }
 
-func (c *Client) Connect(ctx context.Context) error {
+func (c *Client) Run(ctx context.Context, stopChan chan struct{}) error {
 	adminRights, err := admin.IsAdmin()
 	if err != nil {
 		return err
 	}
-
 	if !adminRights {
 		return fmt.Errorf("admin rights not granted")
 	}
@@ -39,11 +39,20 @@ func (c *Client) Connect(ctx context.Context) error {
 		return err
 	}
 
-	go c.tunManager.Read(ctx)
-	go c.coordinator.Listen(ctx)
+	vpnNet := entities.VpnNet{}
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		c.tunManager.Read(ctx, stopChan, vpnNet)
+	}()
+	go func() {
+		defer wg.Done()
+		c.coordinator.Listen(ctx, stopChan, vpnNet)
+	}()
 
 	netRequest := entities.NetRequest{
-		TunIP: c.tunManager.GetConfig().Info.IP,
+		TunIP: c.tunManager.GetConfig().IP,
 		Type:  "add",
 	}
 	netRequestBytes, err := json.Marshal(netRequest)
@@ -54,6 +63,8 @@ func (c *Client) Connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	wg.Wait()
 
 	return nil
 }

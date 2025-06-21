@@ -21,7 +21,7 @@ func NewCoordinatorUDP(config entities.CoordinatorConfig) *CoordinatorUDP {
 }
 
 func (c *CoordinatorUDP) Connect() error {
-	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", c.Config.Info.IP, c.Config.Info.Port))
+	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", c.Config.IP, c.Config.Port))
 	if err != nil {
 		return err
 	}
@@ -36,23 +36,21 @@ func (c *CoordinatorUDP) Connect() error {
 	return nil
 }
 
-func (c *CoordinatorUDP) Listen(ctx context.Context) {
-	defer func() {
-		c.Config.Wg.Done()
-		c.Conn.Close()
-	}()
+func (c *CoordinatorUDP) Listen(ctx context.Context, stopChan chan struct{}, vpnNet entities.VpnNet) {
+	defer c.Conn.Close()
 
 	if c.Conn == nil {
 		log.Printf("Error - udp Listen() before Connect()")
+		stopChan <- struct{}{}
 		return
 	}
 
-	buf := make([]byte, c.Config.Info.MTU)
+	buf := make([]byte, c.Config.MTU)
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Stopping Coordinator Listen")
+			log.Println("Stopping Coordinator")
 			return
 		default:
 		}
@@ -64,16 +62,17 @@ func (c *CoordinatorUDP) Listen(ctx context.Context) {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
-			log.Println("udp read error: ", err.Error())
-			return
+
+			log.Println("Coordinator read error: ", err.Error())
+			stopChan <- struct{}{}
+			continue
 		}
 
 		recieved := buf[:n]
 		fmt.Println("> ", string(recieved))
-		err = json.Unmarshal(recieved, &c.Config.VpnNet)
+		err = json.Unmarshal(recieved, &vpnNet)
 		if err != nil {
 			log.Println("udp unmarshal error: ", err.Error())
-			return
 		}
 	}
 

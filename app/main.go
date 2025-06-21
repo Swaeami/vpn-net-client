@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -21,7 +19,7 @@ const (
 	MTU            = 9000
 	THIS_IP        = "26.10.0.10"
 	NETWORK        = "26.10.0.0/24"
-	INTERFACE_NAME = "utun151"
+	INTERFACE_NAME = "swaeamiVPN"
 
 	COORDINATOR_IP   = "127.0.0.1"
 	COORDINATOR_PORT = 26100
@@ -32,56 +30,52 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	stopChan := make(chan struct{}, 1)
+	defer close(stopChan)
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		<-sigChan
-		log.Println("stopping...")
-		cancel()
-		if runtime.NumGoroutine() > 3 {
+		gracefulShutdown := func() {
+			log.Println("Gracefully stopping")
+			cancel()
 			go func() {
 				time.Sleep(5 * time.Second)
+				log.Println("Force stopping after 5 seconds")
 				os.Exit(1)
 			}()
-		} else {
-			os.Exit(1)
+		}
+		select {
+		case <-sigChan:
+			gracefulShutdown()
+		case <-stopChan:
+			gracefulShutdown()
 		}
 	}()
 
-	var vpnNet entities.VpnNet
-	wg := sync.WaitGroup{}
-
 	coordinator := coordinator.NewCoordinatorUDP(entities.CoordinatorConfig{
-		Info: entities.CoordinatorInfo{
-			IP:   COORDINATOR_IP,
-			Port: COORDINATOR_PORT,
-			MTU:  COORDINATOR_MTU,
-		},
-		Wg:     &wg,
-		VpnNet: &vpnNet,
+		IP:   COORDINATOR_IP,
+		Port: COORDINATOR_PORT,
+		MTU:  COORDINATOR_MTU,
 	})
 	tun := tun.NewTun(entities.TunConfig{
-		Info: entities.TunInfo{
-			InterfaceName: INTERFACE_NAME,
-			IP:            THIS_IP,
-			MTU:           MTU,
-			Network:       NETWORK,
-		},
-		Wg:     &wg,
-		VpnNet: &vpnNet,
+		InterfaceName: INTERFACE_NAME,
+		IP:            THIS_IP,
+		MTU:           MTU,
+		Network:       NETWORK,
 	})
 
+	wg := sync.WaitGroup{}
 	client := usecases.NewClient(coordinator, tun)
-	wg.Add(2)
-	err := client.Connect(ctx)
-	if err != nil {
-		log.Println(err.Error())
-		fmt.Scanln()
-		return
-	}
-	log.Println("vpn started")
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		client.Run(ctx, stopChan)
+	}()
+	log.Println("App started")
 
 	wg.Wait()
-	log.Println("vpn stopped")
+	log.Println("App stopped")
 }
