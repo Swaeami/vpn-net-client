@@ -24,6 +24,11 @@ func NewTun(config entities.TunConfig) *Tun {
 func (t *Tun) Create() error {
 	config := water.Config{
 		DeviceType: water.TAP,
+		PlatformSpecificParams: water.PlatformSpecificParams{
+			ComponentID:   "tap0901",
+			InterfaceName: "swaeami-tun",
+			Network:       t.Config.Info.Network,
+		},
 	}
 
 	tunInterface, err := water.New(config)
