@@ -3,7 +3,9 @@ package usecases
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
+	"github.com/Swaeami/vpn-net/client/helpers/admin"
 	"github.com/Swaeami/vpn-net/client/internal/domain/entities"
 	"github.com/Swaeami/vpn-net/client/internal/domain/ports"
 )
@@ -18,7 +20,16 @@ func NewClient(coordinator ports.NetworkCoordinator, tunManager ports.TunManager
 }
 
 func (c *Client) Connect(ctx context.Context) error {
-	err := c.tunManager.Create()
+	adminRights, err := admin.IsAdmin()
+	if err != nil {
+		return err
+	}
+
+	if !adminRights {
+		return fmt.Errorf("admin rights not granted")
+	}
+
+	err = c.tunManager.Create()
 	if err != nil {
 		return err
 	}

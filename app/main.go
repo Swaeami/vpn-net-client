@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -34,9 +35,21 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	go func() {
+		<-sigChan
+		log.Println("stopping...")
+		cancel()
+		if runtime.NumGoroutine() > 3 {
+			go func() {
+				time.Sleep(5 * time.Second)
+				os.Exit(1)
+			}()
+		}
+		os.Exit(1)
+	}()
+
 	var vpnNet entities.VpnNet
 	wg := sync.WaitGroup{}
-	wg.Add(2)
 
 	coordinator := coordinator.NewCoordinatorUDP(entities.CoordinatorConfig{
 		Info: entities.CoordinatorInfo{
@@ -58,33 +71,15 @@ func main() {
 		VpnNet: &vpnNet,
 	})
 
-	err := tun.CheckAdminRights()
-	if err != nil {
-		log.Printf("admin rights error: %v", err)
-		fmt.Scanln()
-		return
-	}
-
 	client := usecases.NewClient(coordinator, tun)
-	err = client.Connect(ctx)
+	wg.Add(2)
+	err := client.Connect(ctx)
 	if err != nil {
 		log.Println(err.Error())
 		fmt.Scanln()
 		return
 	}
 	log.Println("vpn started")
-
-	go func() {
-		<-sigChan
-		log.Println("stopping...")
-		cancel()
-		// force stop
-		go func() {
-			time.Sleep(5 * time.Second)
-			log.Println("gracefull stop did not succeed, force stop")
-			os.Exit(1)
-		}()
-	}()
 
 	wg.Wait()
 	log.Println("vpn stopped")

@@ -3,8 +3,6 @@
 package tun
 
 import (
-	"fmt"
-	"os"
 	"os/exec"
 	"strconv"
 
@@ -37,7 +35,7 @@ func (t *Tun) Create() error {
 		return err
 	}
 
-	cmd = exec.Command("r", t.Config.Info.InterfaceName, "mtu", strconv.Itoa(t.Config.Info.MTU))
+	cmd = exec.Command("ifconfig", t.Config.Info.InterfaceName, "mtu", strconv.Itoa(t.Config.Info.MTU))
 	_, err = cmd.Output()
 	if err != nil {
 		return err
@@ -62,34 +60,5 @@ func (t *Tun) Destroy() error {
 	cmd.Output()
 
 	t.Interface.Close()
-	return nil
-}
-
-func (t *Tun) CheckAdminRights() error {
-	if os.Geteuid() != 0 {
-		fmt.Println("requires admin rights")
-		return t.restartWithSudo()
-	}
-	return nil
-}
-
-func (t *Tun) restartWithSudo() error {
-	executable, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("executable path error: %w", err)
-	}
-	args := os.Args[1:]
-
-	cmd := exec.Command("sudo", append([]string{executable}, args...)...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	err = cmd.Run()
-	if err != nil {
-		return fmt.Errorf("restart with sudo error: %w", err)
-	}
-
-	os.Exit(0)
 	return nil
 }

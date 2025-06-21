@@ -4,11 +4,9 @@ package tun
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/Swaeami/vpn-net/client/internal/domain/entities"
@@ -73,51 +71,5 @@ func (t *Tun) Destroy() error {
 	cmd.Output()
 
 	t.Interface.Close()
-	return nil
-}
-
-func (t *Tun) CheckAdminRights() error {
-	isAdmin, err := t.isRunningAsAdmin()
-	if err != nil {
-		return fmt.Errorf("admin rights error: %w", err)
-	}
-
-	if !isAdmin {
-		fmt.Println("requires admin rights")
-		return t.restartAsAdmin()
-	}
-	return nil
-}
-
-func (t *Tun) isRunningAsAdmin() (bool, error) {
-	shell32 := syscall.NewLazyDLL("shell32.dll")
-	isUserAnAdmin := shell32.NewProc("IsUserAnAdmin")
-
-	ret, _, _ := isUserAnAdmin.Call()
-	return ret != 0, nil
-}
-
-func (t *Tun) restartAsAdmin() error {
-	executable, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("executable path error: %w", err)
-	}
-
-	args := os.Args[1:]
-	argsStr := strings.Join(args, " ")
-
-	psCmd := fmt.Sprintf(`Start-Process -FilePath "%s" -ArgumentList "%s" -Verb RunAs -Wait`, executable, argsStr)
-
-	cmd := exec.Command("powershell", "-Command", psCmd)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	err = cmd.Run()
-	if err != nil {
-		return fmt.Errorf("restart as admin error: %w", err)
-	}
-
-	os.Exit(0)
 	return nil
 }

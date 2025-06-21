@@ -11,5 +11,4 @@ type TunManager interface {
 	Read(ctx context.Context)
 	GetConfig() entities.TunConfig
 	Destroy() error
-	CheckAdminRights() error
 }
